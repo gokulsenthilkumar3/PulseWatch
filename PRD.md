@@ -1,177 +1,104 @@
-# PulseWatch — Product Requirements Document (PRD)
+# PRD — PulseWatch
 
-## 1. Overview
-
-**Product Name:** PulseWatch  
-**Tagline:** Your apps are alive. Know when they’re not.  
-**Type:** Self-Hosted Uptime Monitoring Tool  
-**Stack:** Node.js · TypeScript · Supabase · Next.js · Telegram Bot API  
-**Target Users:** Solo developers, indie hackers, small dev teams with deployed apps  
+## Overview
+PulseWatch is a self-hosted uptime and deployment health monitor for Vercel, Render, and custom HTTP endpoints. It provides cron-based polling, Telegram and email alerts, incident history, and a public status page.
 
 ---
 
-## 2. Problem Statement
-
-Developers deploy apps on Vercel and Render free tiers — but these sleep, crash, or timeout silently. Paid uptime services like Better Uptime or UptimeRobot charge $20+/mo. PulseWatch is a free, self-hostable alternative that any developer can deploy in 10 minutes.
-
----
-
-## 3. Features
-
-### 3.1 Core (MVP)
-- [ ] Add/remove monitored endpoints (URL + name + check interval)
-- [ ] HTTP health check with cron (1-min intervals)
-- [ ] Response time tracking
-- [ ] Telegram + email alerts on down/up events
-- [ ] Incident log (when down, how long, resolved at)
-- [ ] Public status page (no auth needed)
-- [ ] Docker Compose for self-host
-
-### 3.2 Growth
-- [ ] SSL certificate expiry alerts
-- [ ] Keyword presence check (assert text in response)
-- [ ] Status page custom domain
-- [ ] Multi-region checks (simulate from Chennai, Mumbai, US)
-- [ ] Slack + Discord alert channels
-- [ ] Managed cloud option (deploy once, monitor many)
+## Problem Statement
+Developers with multiple deployed apps (Vercel, Render, Railway) have no unified way to monitor uptime. Paid tools like Better Uptime cost $20+/mo. Free tools lack customization. There's no simple self-hostable solution that takes 10 minutes to set up.
 
 ---
 
-## 4. Architecture
-
-```
-┌────────────────────────────────────────────────┐
-│              Cron Engine (node-cron)             │
-│   runs every 1 min → polls all active endpoints  │
-└─────────────────┬────────────────────────────────┘
-                 │
-      ┌─────────┴───────────┐
-      │ HTTP GET each URL        │
-      │ record: status, latency  │
-      └────────┬─────────────┘
-               │
-       ┌──────┴──────┐
-       │              │
-    UP ▼           DOWN ▼
-  Write log     Write incident
-  to Supabase   + fire alert
-                   │
-         ┌───────┴────────┐
-         │               │
-   Telegram Bot      Nodemailer
-   Alert              Alert
-
-         Supabase DB
-  ────────────────────────
-  endpoints | checks | incidents
-
-  Next.js Dashboard + Status Page
-  ────────────────────────
-  /dashboard  (auth, manage endpoints)
-  /status     (public, no auth)
-```
+## Goals
+- Poll endpoints every 1 minute and record response time + status code
+- Send Telegram and/or email alerts when a service goes down or recovers
+- Show a public-facing status page (like statuspage.io, but free)
+- Store 90-day incident history
+- Docker Compose self-host in < 10 minutes
 
 ---
 
-## 5. Database Schema
-
-```sql
-endpoints (
-  id uuid PK,
-  user_id uuid FK,
-  name varchar(100),
-  url varchar(500),
-  method varchar(10),        -- GET | POST
-  expected_status integer,   -- 200
-  check_interval_min integer, -- 1 | 5 | 10
-  is_active boolean,
-  created_at timestamptz
-)
-
-checks (
-  id uuid PK,
-  endpoint_id uuid FK,
-  status_code integer,
-  latency_ms integer,
-  is_up boolean,
-  checked_at timestamptz
-)
-
-incidents (
-  id uuid PK,
-  endpoint_id uuid FK,
-  started_at timestamptz,
-  resolved_at timestamptz,
-  duration_seconds integer,
-  cause varchar(255)
-)
-
-alert_channels (
-  id uuid PK,
-  user_id uuid FK,
-  type varchar(20),           -- telegram | email | slack
-  config jsonb                -- {"chat_id": "...", "token": "..."}
-)
-```
+## Non-Goals
+- No SSL certificate monitoring (v1)
+- No domain expiry monitoring (v1)
+- No paid managed cloud (v1 — self-host only)
 
 ---
 
-## 6. Docker Compose (Self-Host)
-
-```yaml
-version: '3.8'
-services:
-  app:
-    build: .
-    ports: ['3000:3000']
-    environment:
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_KEY=${SUPABASE_KEY}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - SMTP_HOST=${SMTP_HOST}
-    restart: always
-  worker:
-    build: ./worker
-    environment:
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_KEY=${SUPABASE_KEY}
-    restart: always
-```
+## Target Users
+- Solo developers and indie hackers with 3-20 deployed apps
+- Small dev teams needing a free internal status page
+- SDET engineers monitoring staging and production environments
 
 ---
 
-## 7. Tech Stack
-
+## Tech Stack
 | Layer | Technology |
 |-------|------------|
-| Cron Worker | Node.js + node-cron |
-| HTTP Client | axios |
-| Alerts | Telegram Bot API + Nodemailer |
+| Poller | Node.js + node-cron |
+| Backend API | Express + TypeScript |
 | Database | Supabase PostgreSQL |
-| Dashboard | Next.js 14 + TypeScript + Tailwind |
-| Self-Host | Docker + Docker Compose |
-| Deployment | Render.com (managed) |
+| Frontend | Next.js 14, Tailwind CSS |
+| Alerts | Telegram Bot API + Nodemailer |
+| Self-host | Docker Compose |
+| Managed Deploy | Render free tier |
 
 ---
 
-## 8. Monetization
-
-| Tier | Price | Limits |
-|------|-------|--------|
-| Self-Hosted | Free | Unlimited (you run it) |
-| Cloud Free | $0 | 5 endpoints, 5-min checks |
-| Cloud Pro | $5/mo | 50 endpoints, 1-min checks, custom status page |
-| Cloud Team | $15/mo | 200 endpoints, multi-user, multi-region |
+## Database Schema
+```
+monitors (id, name, url, method, interval_sec, owner_id, is_active)
+incidents (id, monitor_id, started_at, resolved_at, cause)
+pings (id, monitor_id, status_code, response_ms, is_up, checked_at)
+alert_channels (id, owner_id, type [telegram|email], config_json)
+```
 
 ---
 
-## 9. Milestones
+## Core Features
 
-| Week | Deliverable |
-|------|-------------|
-| 1 | Cron poller + Supabase logging |
-| 2 | Telegram + email alerts |
-| 3 | Next.js dashboard (add/remove endpoints) |
-| 4 | Public status page |
-| 5 | Docker Compose + README deploy guide |
-| 6 | SSL expiry checks + keyword assertions |
+### v1.0 (MVP)
+- [ ] Add/edit/delete monitors (URL, method, interval)
+- [ ] Cron poller every 1 min with response time logging
+- [ ] Telegram and email alert on down/up transition
+- [ ] Incident timeline view
+- [ ] Public status page (shareable URL)
+
+### v1.1
+- [ ] Response time graphs (7d, 30d, 90d)
+- [ ] Multi-region checks (using 2 Render regions)
+- [ ] Slack notification channel
+- [ ] Status page custom domain
+
+### v2.0
+- [ ] Managed cloud hosting option
+- [ ] SSL expiry and domain monitoring
+- [ ] Team access with invite links
+- [ ] Monthly uptime SLA report PDF
+
+---
+
+## Business Model (v2)
+| Plan | Price | Features |
+|------|-------|----------|
+| Self-host | Free | Unlimited monitors, all features |
+| Cloud Starter | $5/mo | 10 monitors, managed hosting |
+| Cloud Pro | $12/mo | 50 monitors, custom domain status page |
+
+---
+
+## Success Metrics
+- 50 GitHub stars in first month
+- < 5 min setup time from clone to running
+- 99.9% poller reliability (< 1 missed ping per 1000)
+- 100 Docker pulls in first 2 weeks
+
+---
+
+## Risks
+| Risk | Mitigation |
+|------|------------|
+| Render free tier sleep (15 min) | Keep-alive self-ping or upgrade to $7/mo |
+| Supabase free tier row limits | Auto-delete pings older than 90 days via cron |
+| Alert spam on flaky endpoints | 3-strike rule before triggering alert |
